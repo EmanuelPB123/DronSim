@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -13,33 +12,9 @@
       padding: 15px;
       border-radius: 8px;
       width: 220px;
-      max-height: 95vh; /* Limit height to 95% of viewport height */
-      overflow-y: auto; /* Enable vertical scrolling */
-
-      /* Styling for the scrollbar */
-      scrollbar-width: thin;
-      scrollbar-color: #666 #333;
+      overflow: auto;
+      max-height: 95vh;
     }
-
-    /* Webkit scrollbar styling */
-    #ui::-webkit-scrollbar {
-      width: 8px;
-    }
-
-    #ui::-webkit-scrollbar-track {
-      background: #333;
-      border-radius: 4px;
-    }
-
-    #ui::-webkit-scrollbar-thumb {
-      background: #666;
-      border-radius: 4px;
-    }
-
-    #ui::-webkit-scrollbar-thumb:hover {
-      background: #888;
-    }
-
     button, select, input[type=number], input[type=range] {
       margin: 5px 0;
       padding: 5px 10px;
@@ -71,7 +46,7 @@
     <label for="cantidadDrones">Cantidad de drones: <span id="cantidadValor">25</span></label>
     <input type="range" id="cantidadDrones" min="1" max="100" value="25">
     <input type="number" id="cantidadDronesInput" min="1" max="100" value="25" />
-
+    
     <select id="formacion">
       <option value="cuadricula">🧱 Cuadrícula</option>
       <option value="circulo">🔵 Círculo</option>
@@ -79,23 +54,10 @@
     </select>
     <button onclick="crearFormacion()">📦 Crear Formación</button>
     <button onclick="ordenDespegar()">🚀 Despegar</button>
-
-    <label for="numGrupos">Número de grupos:</label>
-    <input type="range" id="numGrupos" min="2" max="5" value="3">
-    <input type="number" id="numGruposInput" min="2" max="5" value="3">
-    <button onclick="separarEnGrupos()">🔀 Separar en Grupos</button>
-    <button onclick="reagruparGrupos()">🤝 Reagrupar</button>
-
-    <label for="grupoControl">Controlar grupo:</label>
-    <select id="grupoControl" onchange="cambiarGrupoControl()">
-      <option value="-1">👥 Todos los grupos</option>
-    </select>
-
     <button onclick="toggleAvanzar()">➡️ Avanzar / Parar</button>
     <button onclick="toggleRotar()">🔄 Rotar / Parar</button>
     <button onclick="cambiarFormacion()">🔁 Cambiar Formación</button>
     <button onclick="toggleSeguirRuta()">🛣️ Seguir Ruta / Parar</button>
-
     <label>Velocidad avance: <input id="velAvance" type="range" min="0" max="1" step="0.01" value="0.2"></label>
     <label>Velocidad rotación: <input id="velRotacion" type="range" min="0" max="0.1" step="0.005" value="0.02"></label>
     <label>Inercia drones: <input id="inerciaDrones" type="range" min="0.01" max="0.2" step="0.01" value="0.05"></label>
@@ -108,6 +70,22 @@
       <p>Q/E: Rotar izquierda/derecha</p>
       <p>Z/X: Subir/Bajar altitud</p>
     </div>
+    <hr style="border-color: #444; margin: 10px 0;">
+    <label for="cantidadGrupos">Cantidad de grupos: <span id="gruposValor">2</span></label>
+    <input type="range" id="cantidadGrupos" min="2" max="10" value="2">
+    <button onclick="separarGrupos()">🔀 Separar en Grupos</button>
+    <button onclick="reagrupar()">🔄 Reagrupar</button>
+    
+    <hr style="border-color: #444; margin: 10px 0;">
+    <label for="tiempoInactividad">Tiempo de inactividad (segundos): <span id="tiempoInactividadValor">5</span></label>
+    <select id="tiempoInactividad">
+      <option value="5">5 segundos</option>
+      <option value="15">15 segundos</option>
+      <option value="30">30 segundos</option>
+      <option value="60">1 minuto</option>
+      <option value="120">2 minutos</option>
+    </select>
+    <p id="estadoPausa" style="color: #ff4444; display: none;">⏸️ Simulación en pausa por inactividad</p>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.min.js"></script>
@@ -137,12 +115,12 @@
     let drones = [];
     let totalDrones = 25;
     let estado = "en_suelo"; // en_suelo, despegando, esperando, moviendo
+    let isPaused = false; // Add this at the top with other state variables
 
-    // The main group now represents the formation leader when no groups are active
-    const mainGroup = new THREE.Group();
-    scene.add(mainGroup);
+    const grupo = new THREE.Group();
+    scene.add(grupo);
 
-    let waypoints = [
+    const waypoints = [
       new THREE.Vector3(0, 0, 0),
       new THREE.Vector3(20, 0, -20),
       new THREE.Vector3(-20, 0, -40),
@@ -152,40 +130,32 @@
     let seguirRuta = false;
     let rutaIndice = 0;
 
-    let grupos = []; // Array to hold group objects
-    let separacionGrupos = 15;
-    let grupoActivo = -1; // -1 means all groups
-
     const keys = { w:false, a:false, s:false, d:false, q:false, e:false, z:false, x:false };
 
     // Altitud objetivo para la formación
     let altitudObjetivo = 10;
 
-    // Store initial relative positions for formations
-    const formationPositions = {
-        cuadricula: [],
-        circulo: [],
-        piramide: []
-    };
+    let gruposActivos = false;
+    let gruposFormaciones = [];
 
-    function generateFormationOffsets(type, count) {
+    function generarFormacion(tipo) {
       const separacion = 4;
-      const offsets = [];
+      const posiciones = [];
 
-      for(let i=0; i<count; i++){
+      for(let i=0; i<totalDrones; i++){
         let x=0,y=0,z=0;
-        if(type === "cuadricula"){
-          const cols = Math.ceil(Math.sqrt(count));
+        if(tipo === "cuadricula"){
+          const cols = Math.ceil(Math.sqrt(totalDrones));
           const row = Math.floor(i / cols);
           const col = i % cols;
           x = (col - (cols-1)/2)*separacion;
           z = (row - (cols-1)/2)*separacion;
-        } else if(type === "circulo"){
+        } else if(tipo === "circulo"){
           const radius=10;
-          const angle = (i/count)*Math.PI*2;
+          const angle = (i/totalDrones)*Math.PI*2;
           x = Math.cos(angle)*radius;
           z = Math.sin(angle)*radius;
-        } else if(type === "piramide"){
+        } else if(tipo === "piramide"){
           const layer = Math.floor(Math.sqrt(i));
           const colsLayer = layer+1;
           const col = i % colsLayer;
@@ -194,22 +164,38 @@
           z = row*separacion;
           y = layer*2;
         }
-        offsets.push(new THREE.Vector3(x,y,z));
+        posiciones.push(new THREE.Vector3(x,y,z));
       }
-      return offsets;
+
+      return posiciones;
     }
 
-    function createDroneMesh(){
+    function crearFormacion(){
+      const tipo = document.getElementById("formacion").value;
+      drones.forEach(d => grupo.remove(d.mesh));
+      drones = [];
+      grupo.rotation.set(0,0,0);
+      grupo.position.set(0,0,0);
+      rutaIndice = 0;
+      seguirRuta = false;
+      avanzar = false;
+      rotar = false;
+      estado = "en_suelo";
+      altitudObjetivo = 10;
+      document.getElementById("altitudValor").textContent = altitudObjetivo;
+
+      const formacion = generarFormacion(tipo);
+      for(let i=0; i<totalDrones; i++){
         // Crear geometría más realista para dron
         const droneGroup = new THREE.Group();
-
+        
         // Cuerpo principal
         const cuerpo = new THREE.Mesh(
           new THREE.BoxGeometry(1, 0.3, 1),
           new THREE.MeshStandardMaterial({ color: 0x333333 })
         );
         droneGroup.add(cuerpo);
-
+        
         // Luces LED
         const luzDelantera = new THREE.Mesh(
           new THREE.SphereGeometry(0.1, 8, 8),
@@ -217,7 +203,7 @@
         );
         luzDelantera.position.set(0, 0.2, 0.4);
         droneGroup.add(luzDelantera);
-
+        
         const luzTrasera = new THREE.Mesh(
           new THREE.SphereGeometry(0.1, 8, 8),
           new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0x440000 })
@@ -230,7 +216,7 @@
           const angulo = (j / 4) * Math.PI * 2;
           const x = Math.cos(angulo) * 0.4;
           const z = Math.sin(angulo) * 0.4;
-
+          
           const rotor = new THREE.Mesh(
             new THREE.CylinderGeometry(0.3, 0.3, 0.02, 8),
             new THREE.MeshStandardMaterial({ color: 0x666666, transparent: true, opacity: 0.3 })
@@ -238,45 +224,13 @@
           rotor.position.set(x, 0.25, z);
           droneGroup.add(rotor);
         }
-        return droneGroup;
-    }
 
-
-    function crearFormacion(){
-      const tipo = document.getElementById("formacion").value;
-
-      // Clear existing drones and groups
-      drones.forEach(d => {
-          if (d.mesh.parent) {
-              d.mesh.parent.remove(d.mesh);
-          }
-      });
-      drones = [];
-      grupos = [];
-      mainGroup.rotation.set(0,0,0);
-      mainGroup.position.set(0,0,0);
-      rutaIndice = 0;
-      seguirRuta = false;
-      avanzar = false;
-      rotar = false;
-      estado = "en_suelo";
-      altitudObjetivo = 10;
-      document.getElementById("altitudValor").textContent = altitudObjetivo;
-      grupoActivo = -1; // Reset controlled group
-      actualizarSelectGrupos(); // Update UI
-
-      // Generate initial formation positions relative to the group center
-      const initialFormation = generateFormationOffsets(tipo, totalDrones);
-      formationPositions[tipo] = initialFormation; // Store for future use
-
-      for(let i=0; i<totalDrones; i++){
-        const droneMesh = createDroneMesh();
-        droneMesh.position.set(initialFormation[i].x, 1, initialFormation[i].z); // Start at ground level
-        mainGroup.add(droneMesh); // Initially add all to main group
-
+        droneGroup.position.set(formacion[i].x, 1, formacion[i].z);
+        grupo.add(droneGroup);
+        
         drones.push({
-          mesh: droneMesh,
-          target: new THREE.Vector3(initialFormation[i].x, altitudObjetivo, initialFormation[i].z), // Target relative to group
+          mesh: droneGroup,
+          target: new THREE.Vector3(formacion[i].x, altitudObjetivo, formacion[i].z),
           velocity: new THREE.Vector3(0, 0, 0),
           acceleration: new THREE.Vector3(0, 0, 0),
           maxSpeed: 8 + Math.random() * 2, // Velocidad máxima variable
@@ -286,9 +240,7 @@
             amplitude: 0.1 + Math.random() * 0.05,
             frequency: 1 + Math.random() * 0.5,
             offset: Math.random() * Math.PI * 2
-          },
-          relativePosition: initialFormation[i].clone(), // Store the position relative to its group's origin
-          groupId: -1 // -1 means part of the main group
+          }
         });
       }
       document.getElementById("count").textContent = drones.length;
@@ -301,7 +253,7 @@
         drones.forEach((drone, i) => {
           setTimeout(() => {
             drone.despegando = true;
-          }, i * 50 + Math.random() * 200); // Staggered takeoff
+          }, i * 50 + Math.random() * 200);
         });
       }
     }
@@ -324,38 +276,81 @@
       }
     }
 
-    function cambiarFormacion(){
-      const tipo = document.getElementById("formacion").value;
-
-      if (grupos.length === 0) {
-          // No groups, apply formation to the main group
-          const newFormationOffsets = generateFormationOffsets(tipo, drones.length);
-          drones.forEach((drone, i) => {
-              drone.relativePosition.copy(newFormationOffsets[i]); // Update relative position
-              // Update target based on new relative position and main group's current state
-              const rotatedOffset = drone.relativePosition.clone().applyEuler(mainGroup.rotation);
-              drone.target.copy(mainGroup.position).add(rotatedOffset);
-              drone.target.y = altitudObjetivo; // Maintain current alt target
-          });
-      } else {
-          // Groups exist, apply formation to each group individually
-          grupos.forEach(grupo => {
-              const dronesInGroup = drones.filter(d => d.groupId === grupo.id);
-              if (dronesInGroup.length > 0) {
-                  const newFormationOffsets = generateFormationOffsets(tipo, dronesInGroup.length);
-                  dronesInGroup.forEach((drone, i) => {
-                      drone.relativePosition.copy(newFormationOffsets[i]); // Update relative position
-                       // Update target based on new relative position and group's current state
-                      const rotatedOffset = drone.relativePosition.clone().applyEuler(grupo.rotation);
-                      drone.target.copy(grupo.posicion).add(rotatedOffset);
-                      drone.target.y = altitudObjetivo; // Maintain current alt target
-                  });
-              }
-          });
+    function separarGrupos() {
+      if(estado !== "esperando" && estado !== "moviendo") return;
+      
+      const cantidadGrupos = parseInt(document.getElementById("cantidadGrupos").value);
+      const dronesPerGroup = Math.floor(drones.length / cantidadGrupos);
+      
+      gruposFormaciones = [];
+      
+      // Calcular posiciones para cada grupo
+      for(let g = 0; g < cantidadGrupos; g++) {
+        const angulo = (g / cantidadGrupos) * Math.PI * 2;
+        const radio = 20; // Distancia de separación entre grupos
+        const centroGrupo = new THREE.Vector3(
+          Math.cos(angulo) * radio,
+          0,
+          Math.sin(angulo) * radio
+        );
+        
+        // Calcular formación local para este grupo
+        const formacionLocal = [];
+        const inicio = g * dronesPerGroup;
+        const fin = g === cantidadGrupos - 1 ? drones.length : (g + 1) * dronesPerGroup;
+        
+        for(let i = inicio; i < fin; i++) {
+          const posLocal = new THREE.Vector3(
+            (i - inicio) % 3 * 2 - 2, // Formación de 3x3 local
+            0,
+            Math.floor((i - inicio) / 3) * 2 - 2
+          );
+          formacionLocal.push(posLocal.add(centroGrupo));
+        }
+        
+        gruposFormaciones.push(formacionLocal);
       }
-       estado = "moviendo"; // Ensure state is moving as they reform
+      
+      // Asignar nuevos targets a los drones
+      let droneIndex = 0;
+      gruposFormaciones.forEach(formacion => {
+        formacion.forEach(pos => {
+          if(droneIndex < drones.length) {
+            drones[droneIndex].target.copy(pos);
+            drones[droneIndex].target.y = altitudObjetivo;
+            droneIndex++;
+          }
+        });
+      });
+      
+      gruposActivos = true;
     }
 
+    function reagrupar() {
+      if(!gruposActivos) return;
+      
+      const tipo = document.getElementById("formacion").value;
+      const formacionOriginal = generarFormacion(tipo);
+      
+      for(let i = 0; i < drones.length; i++) {
+        drones[i].target.copy(formacionOriginal[i]);
+        drones[i].target.y = altitudObjetivo;
+      }
+      
+      gruposActivos = false;
+    }
+
+    function cambiarFormacion(){
+      if(gruposActivos) {
+        separarGrupos(); // Mantener la separación en grupos si está activa
+      } else {
+        const tipo = document.getElementById("formacion").value;
+        const nueva = generarFormacion(tipo);
+        for(let i=0; i<drones.length; i++){
+          drones[i].target.set(nueva[i].x, altitudObjetivo, nueva[i].z);
+        }
+      }
+    }
 
     function toggleSeguirRuta(){
       if(estado === "esperando" || estado === "moviendo"){
@@ -363,206 +358,13 @@
         if(seguirRuta) {
           estado = "moviendo";
           rutaIndice = 0;
-           // When following route, the main group moves
-           grupos = []; // Clear groups when following route
-           grupoActivo = -1; // Reset controlled group
-           actualizarSelectGrupos(); // Update UI
-           // Make sure all drones are parented back to the main group if they were in separate groups
-           drones.forEach(d => {
-               if (d.mesh.parent !== mainGroup) {
-                   mainGroup.add(d.mesh);
-               }
-               d.groupId = -1; // Assign back to main group
-               // Update relative position based on current main group position
-               d.relativePosition.copy(d.mesh.position).sub(mainGroup.position);
-           });
-
         } else if(!avanzar && !rotar){
           estado = "esperando";
         }
       }
     }
 
-    function separarEnGrupos() {
-      if(estado !== "esperando" && estado !== "moviendo") return; // Can separate when waiting or moving
-
-      // Ensure all drones are currently part of the main group's logic
-      if (grupos.length > 0 || grupoActivo !== -1) {
-           // If already in groups, maybe regroup first? Or just re-separate?
-           // Let's force a regroup action first if they are in groups.
-           reagruparGrupos(); // Clear current groups and put everyone in main formation
-           // Wait a moment for them to settle near the mainGroup before separating?
-           // Or proceed immediately, the physics will handle the transition. Let's proceed.
-      }
-
-
-      const numGrupos = parseInt(document.getElementById("numGrupos").value);
-      const tipoFormacion = document.getElementById("formacion").value;
-
-      // Clear existing groups but keep drones
-      grupos = [];
-      grupoActivo = -1; // Reset controlled group
-
-      // Ensure all drones are initially parented to mainGroup (this is needed for separation)
-      // If they were already separated, this might cause a jump.
-      // The best approach is to first bring them all back to mainGroup state before splitting.
-      // The call to reagruparGrupos() above should handle this if groups existed.
-      // If called directly from "esperando" with no groups, they are already in mainGroup conceptually.
-
-
-      const dronesPerGroup = Math.ceil(drones.length / numGrupos);
-
-      for(let i = 0; i < numGrupos; i++) {
-        const startIndex = i * dronesPerGroup;
-        const endIndex = Math.min(startIndex + dronesPerGroup, drones.length);
-        const dronesEnGrupo = drones.slice(startIndex, endIndex);
-
-        if (dronesEnGrupo.length === 0) continue;
-
-        // Calculate initial position for the group relative to the world origin
-        const angulo = (i / numGrupos) * Math.PI * 2;
-        const posicionGrupo = new THREE.Vector3(
-          Math.cos(angulo) * separacionGrupos,
-          0, // Y will be handled by altitudObjetivo
-          Math.sin(angulo) * separacionGrupos
-        );
-
-        // Generate the formation offsets for the drones within THIS group
-        const groupFormationOffsets = generateFormationOffsets(tipoFormacion, dronesEnGrupo.length);
-
-
-        grupos.push({
-          id: i,
-          drones: dronesEnGrupo, // Keep reference to drone objects
-          posicion: posicionGrupo, // Group's central position (in world space)
-          rotation: new THREE.Euler(0, 0, 0), // Group's rotation
-          altitud: altitudObjetivo // Each group will track its own alt target? Or share global? Let's share global for now.
-        });
-
-        // Update drones: assign group ID and set relative positions
-        dronesEnGrupo.forEach((drone, j) => {
-             drone.groupId = i;
-             drone.relativePosition.copy(groupFormationOffsets[j]);
-             // Initial target based on new group position and relative offset
-             const rotatedOffset = drone.relativePosition.clone().applyEuler(grupos[i].rotation);
-             drone.target.copy(grupos[i].posicion).add(rotatedOffset);
-             drone.target.y = altitudObjetivo;
-        });
-      }
-
-      actualizarSelectGrupos(); // Update UI
-
-      // Reparent drones to the scene if they were in mainGroup
-      drones.forEach(d => {
-           if (d.mesh.parent === mainGroup) {
-               mainGroup.remove(d.mesh);
-               // Add to scene directly, they will navigate based on their target
-               scene.add(d.mesh);
-           }
-           // If they were already in the scene (from a previous separation), do nothing here.
-      });
-
-
-      estado = "moviendo"; // State becomes moving as they reposition
-    }
-
-    function reagruparGrupos() {
-       if (grupos.length === 0) {
-            // No groups to regroup, perhaps just ensure they are in formation?
-            // Let's call crearFormacion() if no groups exist, it resets to main formation state.
-            // This makes the button useful even if not currently in groups.
-            crearFormacion();
-            return;
-       }
-
-        const tipoFormacion = document.getElementById("formacion").value;
-
-       // Clear existing groups
-       grupos = [];
-       grupoActivo = -1; // Reset controlled group
-       actualizarSelectGrupos(); // Update UI
-
-       // Generate formation offsets for the single main group
-       const mainFormationOffsets = generateFormationOffsets(tipoFormacion, drones.length);
-
-       // Set mainGroup position to average position of all drones or just reset to origin?
-       // Resetting to origin seems simpler and provides a clear "home" point.
-       mainGroup.position.set(0,0,0);
-       mainGroup.rotation.set(0,0,0); // Also reset rotation
-
-       // Update each drone to be part of the main group
-       drones.forEach((drone, i) => {
-            drone.groupId = -1; // Assign back to main group
-            drone.relativePosition.copy(mainFormationOffsets[i]); // Update relative position within the main formation
-
-            // Reparent drone mesh back to the main group if it was parented to the scene
-            if (drone.mesh.parent !== mainGroup) {
-                 if (drone.mesh.parent) { // Ensure it has a parent before removing
-                     drone.mesh.parent.remove(drone.mesh);
-                 }
-                 mainGroup.add(drone.mesh);
-                 // When adding back to the mainGroup, the drone's position needs to be relative to the group.
-                 // Set its position to its new relative position. The target will be calculated from this.
-                 drone.mesh.position.copy(drone.relativePosition);
-            } else {
-                // If already parented to mainGroup (e.g., called after creerFormacion), update its relative pos
-                 drone.mesh.position.copy(drone.relativePosition); // This makes them snap into the new formation shape immediately relative to the group's origin
-            }
-
-
-            // Update target based on new relative position and main group's current state
-            // The target will be calculated dynamically in the animate loop based on mainGroup.position + rotated relativePosition
-            // For now, set the target to where they should be relative to the mainGroup's *current* position (0,0,0 initially)
-            const rotatedOffset = drone.relativePosition.clone().applyEuler(mainGroup.rotation);
-            drone.target.copy(mainGroup.position).add(rotatedOffset);
-            drone.target.y = altitudObjetivo; // Maintain current alt target
-       });
-
-       // The drones are now positioned relatively *inside* mainGroup at their new formation spots.
-       // Their *world* position will be mainGroup.position + drone.mesh.position (which is relativePosition).
-       // The physics update loop will then move them towards their `drone.target` which is based on the *world* position they *should* be at
-       // relative to the mainGroup's current world position.
-
-       estado = "moviendo"; // State becomes moving as they reposition (towards the mainGroup's current world position)
-    }
-
-
-    function cambiarGrupoControl() {
-      grupoActivo = parseInt(document.getElementById("grupoControl").value);
-    }
-
-    function actualizarSelectGrupos() {
-      const select = document.getElementById("grupoControl");
-      // Mantener la opción "Todos los grupos"
-      select.innerHTML = '<option value="-1">👥 Todos los grupos</option>';
-
-      // Agregar una opción por cada grupo
-      grupos.forEach((grupo, index) => {
-        select.innerHTML += `<option value="${index}">Grupo ${index + 1}</option>`;
-      });
-
-      // Mantener la selección actual si es válida
-      if (grupoActivo >= grupos.length && grupos.length > 0) {
-           // If the previously selected group index is now out of bounds
-           // and there are still groups, default to selecting the first group
-           grupoActivo = 0; // Select the first group
-      } else if (grupos.length === 0) {
-           // If there are no groups, control defaults back to the main formation (-1)
-           grupoActivo = -1;
-      }
-      select.value = grupoActivo;
-    }
-
     window.addEventListener("keydown", e => {
-      // Check if the target element is an input or select
-      const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT';
-      if (isInput) {
-          // If inside an input, don't process navigation keys
-          if (['w', 'a', 's', 'd', 'q', 'e', 'z', 'x'].includes(e.key.toLowerCase())) {
-              return;
-          }
-      }
-
       switch(e.key.toLowerCase()){
         case "w": keys.w = true; break;
         case "a": keys.a = true; break;
@@ -588,104 +390,131 @@
       }
     });
 
+    // Agregar manejador para cuando la ventana pierde el foco
+    window.addEventListener("blur", () => {
+      // Resetear todas las teclas cuando la ventana pierde el foco
+      Object.keys(keys).forEach(key => keys[key] = false);
+      isPaused = true;
+      if (inactivityTimeout) {
+        clearTimeout(inactivityTimeout);
+      }
+    });
+
+    window.addEventListener("focus", () => {
+      isPaused = false;
+      resetInactivityTimer();
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        isPaused = true;
+        // Reset movement states
+        avanzar = false;
+        rotar = false;
+        seguirRuta = false;
+        // Reset all keys
+        Object.keys(keys).forEach(key => keys[key] = false);
+        if (inactivityTimeout) {
+          clearTimeout(inactivityTimeout);
+        }
+      } else {
+        isPaused = false;
+        resetInactivityTimer();
+      }
+    });
+
+    let lastActivityTime = Date.now();
+    let inactivityTimeout = null;
+    
+    function resetInactivityTimer() {
+      lastActivityTime = Date.now();
+      if (isPaused && !document.hidden) {
+        isPaused = false;
+        document.getElementById('estadoPausa').style.display = 'none';
+      }
+      if (inactivityTimeout) {
+        clearTimeout(inactivityTimeout);
+      }
+      startInactivityTimer();
+    }
+
+    function startInactivityTimer() {
+      const tiempoInactividad = parseInt(document.getElementById('tiempoInactividad').value) * 1000;
+      inactivityTimeout = setTimeout(() => {
+        if (!document.hidden) {  // Solo pausar si la página está visible
+          isPaused = true;
+          document.getElementById('estadoPausa').style.display = 'block';
+        }
+      }, tiempoInactividad);
+    }
+
+    // Agregar event listeners para detectar actividad
+    window.addEventListener('mousemove', resetInactivityTimer);
+    window.addEventListener('keydown', resetInactivityTimer);
+    window.addEventListener('click', resetInactivityTimer);
+    window.addEventListener('scroll', resetInactivityTimer);
+
+    // Actualizar tiempo de inactividad cuando cambie el selector
+    document.getElementById('tiempoInactividad').addEventListener('change', () => {
+      const tiempoSeleccionado = document.getElementById('tiempoInactividad').value;
+      document.getElementById('tiempoInactividadValor').textContent = tiempoSeleccionado;
+      resetInactivityTimer();
+    });
+
+    // Iniciar el timer de inactividad
+    startInactivityTimer();
 
     function moverPorTeclado(delta, velAvance, velRotacion){
-        if (estado !== "esperando" && estado !== "moviendo") return;
+      if(keys.q) grupo.rotation.y += velRotacion * delta;
+      if(keys.e) grupo.rotation.y -= velRotacion * delta;
 
-        const groupsToControl = grupoActivo === -1 ? (grupos.length > 0 ? grupos : [ {id:-1, posicion: mainGroup.position, rotation: mainGroup.rotation, drones: drones, isMain: true} ] ) : [grupos[grupoActivo]];
+      const dir = new THREE.Vector3();
+      if(keys.w) dir.z -= 1;
+      if(keys.s) dir.z += 1;
+      if(keys.a) dir.x -= 1;
+      if(keys.d) dir.x += 1;
 
-        groupsToControl.forEach(entity => { // entity is either a group object or a temp object representing mainGroup
-            const currentRotation = entity.rotation;
-            const currentPosition = entity.isMain ? entity.posicion : entity.posicion; // Use group.posicion for groups
+      if(dir.lengthSq() > 0){
+        dir.normalize();
+        dir.applyEuler(grupo.rotation);
+        grupo.position.addScaledVector(dir, velAvance * delta);
+      }
 
-            if(keys.q) currentRotation.y += velRotacion * delta;
-            if(keys.e) currentRotation.y -= velRotacion * delta;
-
-            const dir = new THREE.Vector3();
-            if(keys.w) dir.z -= 1;
-            if(keys.s) dir.z += 1;
-            if(keys.a) dir.x -= 1;
-            if(keys.d) dir.x += 1;
-
-            if(dir.lengthSq() > 0){
-               dir.normalize();
-               dir.applyEuler(currentRotation);
-               currentPosition.addScaledVector(dir, velAvance * delta);
-            }
-
-            // Update altitud for this specific group or all groups
-            if(keys.z){
-               altitudObjetivo += 5 * delta; // Apply to global alt target
-               if(altitudObjetivo > 30) altitudObjetivo = 30;
-            }
-            if(keys.x){
-               altitudObjetivo -= 5 * delta; // Apply to global alt target
-               if(altitudObjetivo < 1) altitudObjetivo = 1;
-            }
-
-            // Update the entity's actual THREE object if it's the mainGroup
-            if (entity.isMain) {
-                 mainGroup.position.copy(currentPosition);
-                 mainGroup.rotation.copy(currentRotation);
-            }
-
-             // Update targets of drones belonging to this entity
-            const dronesInEntity = entity.isMain ? drones : entity.drones;
-            const currentFormationType = document.getElementById("formacion").value;
-            const formationOffsets = generateFormationOffsets(currentFormationType, dronesInEntity.length);
-
-
-            dronesInEntity.forEach((drone, i) => {
-                 // Recalculate the target relative to the entity's updated position and rotation
-                 const rotatedOffset = formationOffsets[i].clone().applyEuler(entity.rotation); // Use entity's rotation
-                 // Target is entity's world position + rotated offset + current alt target
-                 drone.target.copy(entity.posicion).add(rotatedOffset); // Use entity's position
-                 drone.target.y = altitudObjetivo; // Use the (potentially updated) global alt target
-            });
-        });
-
-        // Update the UI altitud value once after processing all entities
-        if (keys.z || keys.x) {
-            document.getElementById("altitudValor").textContent = altitudObjetivo.toFixed(1);
-        }
+      if(keys.z){
+        altitudObjetivo += 5 * delta;
+        if(altitudObjetivo > 30) altitudObjetivo = 30;
+        actualizarAltitudObjetivo();
+      }
+      if(keys.x){
+        altitudObjetivo -= 5 * delta;
+        if(altitudObjetivo < 1) altitudObjetivo = 1;
+        actualizarAltitudObjetivo();
+      }
     }
 
-    // Altitud update function - now primarily used by Z/X keys when controlling main group
-    // Or implicitly updated via the key handler for individual groups.
     function actualizarAltitudObjetivo(){
       document.getElementById("altitudValor").textContent = altitudObjetivo.toFixed(1);
-      // This function is less critical now that targets are updated per drone based on group/mainGroup state + alt target
-      // However, calling it after Z/X keys when controlling mainGroup ensures targets are updated.
-      // The logic for updating targets is now integrated into moverPorTeclado and animate loop.
-      // This function mainly serves to update the UI.
+      drones.forEach(d => {
+        d.target.y = altitudObjetivo;
+      });
     }
-
 
     function seguirWaypoints(velAvance, velRotacion, delta){
       if(waypoints.length === 0) return;
-
-      // When following route, only the mainGroup moves
-      if (grupos.length > 0 || grupoActivo !== -1) {
-           // If groups exist or a specific group is controlled, following route is disabled.
-           // Or maybe clear groups and switch to mainGroup control? Let's make seguirRuta clear groups.
-           // This is handled in toggleSeguirRuta now.
-           return;
-      }
-
       const objetivo = waypoints[rutaIndice];
-      const posActual = mainGroup.position.clone();
-      posActual.y = 0; // Consider movement on the ground plane for waypoint logic
+      const posActual = grupo.position.clone();
+      posActual.y = 0;
       const objetivoPlano = objetivo.clone();
       objetivoPlano.y = 0;
 
       const dir = new THREE.Vector3().subVectors(objetivoPlano, posActual);
       const distancia = dir.length();
-      if(distancia < 1.0){ // Increased tolerance slightly
+      if(distancia < 0.5){
         rutaIndice = (rutaIndice + 1) % waypoints.length;
       } else {
         dir.normalize();
 
-        let angActual = mainGroup.rotation.y % (Math.PI*2);
+        let angActual = grupo.rotation.y % (Math.PI*2);
         if(angActual < 0) angActual += Math.PI*2;
         let angDeseado = Math.atan2(dir.x, dir.z);
         if(angDeseado < 0) angDeseado += Math.PI*2;
@@ -694,338 +523,126 @@
         if(diff > Math.PI) diff -= Math.PI*2;
         if(diff < -Math.PI) diff += Math.PI*2;
 
-        // Rotate towards target orientation
-        const rotationSpeed = velRotacion * delta;
-        if (Math.abs(diff) > rotationSpeed) {
-            mainGroup.rotation.y += Math.sign(diff) * rotationSpeed;
+        if(Math.abs(diff) > 0.02){
+          grupo.rotation.y += Math.sign(diff)*velRotacion*delta;
         } else {
-            mainGroup.rotation.y = angDeseado;
+          grupo.rotation.y = angDeseado;
+          grupo.position.addScaledVector(dir, velAvance*delta);
         }
-
-
-        // Only move forward if aligned enough
-        if (Math.abs(diff) < Math.PI / 10) { // Allow movement if angle difference is less than 18 degrees
-             mainGroup.position.addScaledVector(dir, velAvance * delta);
-        }
-
-
-         // Update drone targets based on new main group position and rotation
-        const currentFormationType = document.getElementById("formacion").value;
-        const formationOffsets = generateFormationOffsets(currentFormationType, drones.length);
-        drones.forEach((drone, i) => {
-            const rotatedOffset = formationOffsets[i].clone().applyEuler(mainGroup.rotation);
-            drone.target.copy(mainGroup.position).add(rotatedOffset);
-            drone.target.y = altitudObjetivo;
-        });
       }
     }
 
     function updateDronePhysics(drone, delta, time) {
       const inercia = parseFloat(document.getElementById("inerciaDrones").value);
-
-      // The drone's target is updated by moverPorTeclado, seguirWaypoints, separarEnGrupos, reagruparGrupos, cambiarFormacion
-      // It represents the desired world-space position for this drone.
-
-      const targetWorld = drone.target; // The target is already in world space
-
-      // Current position: If the drone is parented to mainGroup, its position is local.
-      // If parented to the scene (when in separate groups), its position is world space.
-      let currentWorld = new THREE.Vector3();
-       if (drone.mesh.parent === mainGroup) {
-           // If parented to mainGroup, get its world position
-           drone.mesh.getWorldPosition(currentWorld);
-       } else {
-           // If parented directly to the scene, its position IS its world position
-           currentWorld.copy(drone.mesh.position);
-       }
-
-
-      // Calculate the force towards the target
-      const force = new THREE.Vector3().subVectors(targetWorld, currentWorld);
+      
+      // Calcular la posición objetivo en el espacio mundial
+      const targetWorld = drone.target.clone().applyMatrix4(grupo.matrixWorld);
+      const currentWorld = drone.mesh.getWorldPosition(new THREE.Vector3());
+      
+      // Convertir de vuelta al espacio local del grupo
+      const targetLocal = targetWorld.clone().applyMatrix4(grupo.matrixWorld.clone().invert());
+      
+      // Calcular la fuerza hacia el objetivo
+      const force = new THREE.Vector3().subVectors(targetLocal, drone.mesh.position);
       const distance = force.length();
-
-      // Determine if the drone is "active" (part of the controlled entity)
-      const isActiveDrone = (grupoActivo === -1 && grupos.length === 0) // Controling main group and no groups exist
-                         || (grupoActivo === -1 && grupos.length > 0 && grupos.some(g => g.drones.includes(drone))) // Controlling all groups and drone is in any group
-                         || (grupoActivo !== -1 && grupos[grupoActivo] && grupos[grupoActivo].drones.includes(drone)); // Controlling a specific group and drone is in that group
-
-
-      // If controlling a specific group or the main group, drones within that entity should react more responsively.
-      // If controlling "all groups" when groups exist, all drones should react.
-      // Drones NOT in the currently controlled entity (if a specific group is controlled) should mostly hold formation relative to their *own* group.
-
-       // Let's simplify: all drones always try to reach their target set by the group/mainGroup logic.
-       // The responsiveness (maxSpeed, maxAcceleration, dampening) can differ based on whether they are in groups or main formation.
-
-       const currentMaxSpeed = grupos.length > 0 ? 10 : 8; // Slightly faster when in groups
-       const currentMaxAcceleration = grupos.length > 0 ? 20 : 15; // Slightly more responsive when in groups
-       const currentDampening = grupos.length > 0 ? 0.9 : 0.85; // Less dampening when in groups
-
-      if(distance > 0.2) { // Only apply significant force if far from target (increased tolerance slightly)
-        // Normalizar y aplicar aceleración proporcional a la distance
+      
+      if(distance > 0.1) {
+        // Normalizar y aplicar aceleración proporcional a la distancia
         force.normalize();
-        // Increase acceleration when far, decrease when close for smoother arrival
-        const accelerationMagnitude = Math.min(distance * 5, currentMaxAcceleration + Math.random()*5);
+        const accelerationMagnitude = Math.min(distance * 2, drone.maxAcceleration);
         force.multiplyScalar(accelerationMagnitude);
-
-        // Apply the force to the acceleration
+        
+        // Aplicar la fuerza a la aceleración
         drone.acceleration.copy(force);
       } else {
-        // If very close, dampen acceleration heavily
+        // Si está cerca del objetivo, reducir aceleración
         drone.acceleration.multiplyScalar(0.1);
-         // Also dampen velocity to prevent overshooting and oscillation
-        drone.velocity.multiplyScalar(0.5); // Halve velocity
       }
-
-
-      // Integrate physics
+      
+      // Integrar física
       drone.velocity.addScaledVector(drone.acceleration, delta);
-
-      // Limit velocity maximum
-      if(drone.velocity.length() > currentMaxSpeed + Math.random()*2) { // Add randomness to max speed
-        drone.velocity.normalize().multiplyScalar(currentMaxSpeed + Math.random()*2);
+      
+      // Limitar velocidad máxima
+      if(drone.velocity.length() > drone.maxSpeed) {
+        drone.velocity.normalize().multiplyScalar(drone.maxSpeed);
       }
-
-      // Apply damping (air resistance)
-      drone.velocity.multiplyScalar(currentDampening + Math.random()*0.05); // Apply damping with randomness
-
-      // Update position based on velocity
-      let newWorldPosition = currentWorld.clone().addScaledVector(drone.velocity, delta);
-
-      // Apply subtle hovering effect (only to Y component)
+      
+      // Aplicar amortiguación (resistencia del aire)
+      drone.velocity.multiplyScalar(drone.dampening);
+      
+      // Actualizar posición
+      drone.mesh.position.addScaledVector(drone.velocity, delta);
+      
+      // Efecto de hovering sutil
       const hoverOffset = Math.sin(time * drone.hover.frequency + drone.hover.offset) * drone.hover.amplitude;
-      newWorldPosition.y += hoverOffset * delta * 5; // Scale hover effect
-
-      // Ensure the drone mesh's position (local or world) is updated correctly
-      if (drone.mesh.parent === mainGroup) {
-          // If parented to mainGroup, calculate the required local position
-           // desired_world = mainGroup_world + new_drone_local
-           // new_drone_local = desired_world - mainGroup_world
-           let mainGroupWorldPosition = new THREE.Vector3();
-           mainGroup.getWorldPosition(mainGroupWorldPosition);
-           drone.mesh.position.copy(newWorldPosition).sub(mainGroupWorldPosition);
-
-      } else {
-          // If parented directly to the scene, set its world position directly
-          drone.mesh.position.copy(newWorldPosition);
-      }
-
-
-      // Rotation based on velocity (makes them point where they are going)
+      drone.mesh.position.y += hoverOffset * delta;
+      
+      // Rotación sutil basada en velocidad
       if(drone.velocity.length() > 0.1) {
-           // Get velocity in world space (which it already is)
-           const worldVelocity = drone.velocity;
-
-           // Calculate target rotation based on horizontal velocity
-          const targetRotationY = Math.atan2(worldVelocity.x, worldVelocity.z);
-           // Smooth Y rotation
-           // Convert drone's current rotation.y to world space if parented? No, rotation is local.
-           // Let's keep rotation local for simpler drone orientation relative to itself.
-           // When parented to mainGroup, its local Y rotation is relative to mainGroup's Y rotation.
-           // When parented to scene, its local Y rotation IS its world Y rotation.
-
-           // A simpler approach: always rotate the drone mesh towards its *world* velocity vector, but apply it to its local rotation.
-           // This might look slightly odd when parented, but is easier to manage.
-           // Let's stick to rotating towards the world velocity vector, applied to local mesh rotation.
-
-           // Smooth Y rotation
-           drone.mesh.rotation.y += (targetRotationY - drone.mesh.rotation.y) * 0.05;
-
-           // Tilt based on acceleration (roll and pitch)
-           // Calculate acceleration in world space (it's already in world space in this physics model)
-           const worldAcceleration = drone.acceleration;
-
-            // Roll (rotation.z) based on world horizontal acceleration perpendicular to current world forward direction
-            // Get the drone's current forward direction in world space
-            const droneWorldForward = new THREE.Vector3(0, 0, -1).applyEuler(drone.mesh.rotation);
-            // Get the world 'right' vector (forward rotated 90 deg up Y axis)
-            const droneWorldRight = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), droneWorldForward).normalize();
-             // Project the acceleration onto the world 'right' vector to get the side force causing roll
-            const sideAcceleration = worldAcceleration.dot(droneWorldRight);
-            const targetRotationZ = -sideAcceleration * 0.05; // Tilt proportional to side acceleration
-
-            // Pitch (rotation.x) based on world acceleration in the forward/backward direction
-            const forwardAcceleration = worldAcceleration.dot(droneWorldForward);
-            const targetRotationX = forwardAcceleration * 0.05; // Pitch proportional to forward/backward acceleration (adjust sign as needed)
-
-
-            drone.mesh.rotation.z += (targetRotationZ - drone.mesh.rotation.z) * 0.1;
-            drone.mesh.rotation.x += (targetRotationX - drone.mesh.rotation.x) * 0.1;
-
-
-      } else {
-          // If stationary or slow, return to level orientation smoothly
-           drone.mesh.rotation.x += (0 - drone.mesh.rotation.x) * 0.1;
-           drone.mesh.rotation.z += (0 - drone.mesh.rotation.z) * 0.1;
-           // Keep Y rotation as is, or perhaps point towards the group center if close?
-           // Let's just level out pitch and roll.
+        const targetRotation = Math.atan2(drone.velocity.x, drone.velocity.z);
+        drone.mesh.rotation.y += (targetRotation - drone.mesh.rotation.y) * 0.05;
+        
+        // Inclinación basada en aceleración lateral
+        const tiltAmount = drone.acceleration.x * 0.1;
+        drone.mesh.rotation.z += (tiltAmount - drone.mesh.rotation.z) * 0.1;
       }
     }
 
     let lastTime = 0;
-    function animate(time = 0){
-      requestAnimationFrame(animate);
-      const currentTime = time * 0.001;
-      const delta = currentTime - lastTime || 0.016;
-      lastTime = currentTime;
+    function animate(time = 0) {
+      if (!isPaused) {
+        requestAnimationFrame(animate);
+        const currentTime = time * 0.001;
+        const delta = currentTime - lastTime || 0.016;
+        lastTime = currentTime;
 
-      if(estado === "despegando"){
-        let allAlcanzaron = true;
-        drones.forEach(d => {
-          // Despegue now just moves the drone mesh's Y position directly upwards
-          // until it reaches the target altitude, ignoring the physics system
-          // temporarily for the Y axis during the takeoff phase.
-          // Their target.y is already set to altitudObjetivo during creation/crearFormacion.
-          if(d.despegando) {
-            const targetY = altitudObjetivo;
-            const currentY = d.mesh.position.y; // Assuming initial position is local (in mainGroup) or world (if scene) but Y is consistent
-
-            if(currentY < targetY - 0.1) { // Check slightly below target
-              // Despegue gradual with acceleration/easing
-              const despegueSpeed = 3 + Math.sin(currentTime * 2) * 0.5; // Simple pulse effect during takeoff
-              // Move only in Y
-               if (d.mesh.parent === mainGroup) {
-                    d.mesh.position.y += despegueSpeed * delta;
-               } else { // If somehow already separate, apply to world Y
-                     d.mesh.position.y += despegueSpeed * delta;
-               }
-
-              allAlcanzaron = false;
-            } else {
-               // Reached target Y for takeoff
-              if (d.mesh.parent === mainGroup) {
-                  d.mesh.position.y = targetY; // Set exact local Y if in mainGroup
+        if(estado === "despegando"){
+          let allAlcanzaron = true;
+          drones.forEach(d => {
+            if(d.despegando) {
+              const targetY = d.target.y;
+              const currentY = d.mesh.position.y;
+              
+              if(currentY < targetY) {
+                // Despegue gradual con aceleración
+                const despegueSpeed = 3 + Math.sin(currentTime * 2) * 0.5;
+                d.mesh.position.y += despegueSpeed * delta;
+                allAlcanzaron = false;
               } else {
-                   d.mesh.position.y = targetY; // Set exact world Y if in scene
+                d.mesh.position.y = targetY;
               }
-
-              d.despegando = false; // Mark takeoff as complete for this drone
+            } else {
+              allAlcanzaron = false;
             }
+          });
+          if(allAlcanzaron) estado = "esperando";
+        } else if(estado === "esperando" || estado === "moviendo"){
+          // Actualizar física de cada dron
+          drones.forEach(d => {
+            updateDronePhysics(d, delta, currentTime);
+          });
+
+          if(seguirRuta){
+            const velAvance = parseFloat(document.getElementById("velAvance").value) * 10;
+            const velRotacion = parseFloat(document.getElementById("velRotacion").value) * 10;
+            seguirWaypoints(velAvance, velRotacion, delta);
           }
-           // Check if ANY drone is still marked 'despegando' or hasn't reached altitudObjetivo
-           if (d.despegando || d.mesh.position.y < altitudObjetivo - 0.1) {
-               allAlcanzaron = false;
-           }
-        });
-        if(allAlcanzaron) {
-            estado = "esperando";
-             // Once takeoff is complete, ensure all drones' Y position is exactly altitudObjetivo
-             // and reset their velocity/acceleration
-             drones.forEach(d => {
-                  if (d.mesh.parent === mainGroup) {
-                      d.mesh.position.y = altitudObjetivo; // Set exact local Y if in mainGroup
-                  } else {
-                      d.mesh.position.y = altitudObjetivo; // Set exact world Y if in scene
-                  }
-                 d.target.y = altitudObjetivo; // Ensure target Y is also correct
-                 d.velocity.set(0,0,0);
-                 d.acceleration.set(0,0,0);
-             });
-        }
-      } else if(estado === "esperando" || estado === "moviendo"){
-
-        // Movement and rotation logic for the controlled entity (mainGroup or groups)
-        const velAvance = parseFloat(document.getElementById("velAvance").value) * 10;
-        const velRotacion = parseFloat(document.getElementById("velRotacion").value) * 10;
-
-        // Apply manual keyboard movement or follow waypoints/auto modes to the controlled entity(ies)
-        if(seguirRuta){
-           // seguirWaypoints updates mainGroup position/rotation AND drone targets
-           seguirWaypoints(velAvance, velRotacion, delta);
-        } else {
-            // moverPorTeclado updates group/mainGroup position/rotation AND drone targets
-            moverPorTeclado(delta, velAvance, velRotacion);
-
-            // Apply auto advance/rotate if active and controlling mainGroup
-            if (grupos.length === 0 && grupoActivo === -1) { // Only apply auto advance/rotate if controlling main group
-                let mainGroupMovedByAuto = false;
-                if(avanzar){
-                    const dir = new THREE.Vector3(0,0,-1).applyEuler(mainGroup.rotation);
-                    mainGroup.position.addScaledVector(dir, velAvance*delta);
-                    mainGroupMovedByAuto = true;
-                }
-                if(rotar){
-                    const rotationSpeed = parseFloat(document.getElementById("velRotacion").value);
-                    mainGroup.rotation.y += rotationSpeed * delta * 10;
-                    mainGroupMovedByAuto = true;
-                }
-
-                // If mainGroup was moved/rotated by auto modes, update drone targets
-                if (mainGroupMovedByAuto) {
-                     const currentFormationType = document.getElementById("formacion").value;
-                     const formationOffsets = generateFormationOffsets(currentFormationType, drones.length);
-                     drones.forEach((drone, i) => {
-                        const rotatedOffset = formationOffsets[i].clone().applyEuler(mainGroup.rotation);
-                        drone.target.copy(mainGroup.position).add(rotatedOffset);
-                         // drone.target.y is updated by altitudObjetivo
-                     });
-                }
-            }
+          if(avanzar && !seguirRuta){
+            const velAvance = parseFloat(document.getElementById("velAvance").value) * 10;
+            const dir = new THREE.Vector3(0,0,-1).applyEuler(grupo.rotation);
+            grupo.position.addScaledVector(dir, velAvance*delta);
+          }
+          if(rotar && !seguirRuta){
+            const velRotacion = parseFloat(document.getElementById("velRotacion").value);
+            grupo.rotation.y += velRotacion*delta*10;
+          }
+          moverPorTeclado(delta, parseFloat(document.getElementById("velAvance").value)*10, parseFloat(document.getElementById("velRotacion").value)*10);
         }
 
-
-        // Update physics for EACH drone regardless of which group/entity is being controlled
-        // Their targets are consistently updated by the logic above.
-        drones.forEach(d => {
-          updateDronePhysics(d, delta, currentTime);
-        });
-
-         // Check if movement is actually happening to stay in "moviendo" state
-         let isMoving = seguirRuta || avanzar || rotar || Object.values(keys).some(k => k); // Consider keyboard input as movement
-
-         // Also check if any drone is still significantly away from its target
-         const formationType = document.getElementById("formacion").value;
-         isMoving = isMoving || drones.some(d => {
-              let groupEntity;
-              if (d.groupId === -1) { // Main group drone
-                  groupEntity = { id: -1, posicion: mainGroup.position, rotation: mainGroup.rotation, drones: drones }; // Use mainGroup state
-              } else { // Specific group drone
-                   groupEntity = grupos.find(g => g.id === d.groupId);
-                   if (!groupEntity) return true; // Should not happen, but just in case
-              }
-
-               // Recalculate the expected world target based on current entity state
-               const dronesInEntity = groupEntity.id === -1 ? drones : groupEntity.drones;
-               const formationOffsets = generateFormationOffsets(formationType, dronesInEntity.length);
-               const droneIndexInEntity = dronesInEntity.indexOf(d);
-               if (droneIndexInEntity === -1) return true; // Should not happen
-
-               const relativePos = formationOffsets[droneIndexInEntity]; // Use regenerated offsets
-
-               const expectedTargetWorld = relativePos.clone().applyEuler(groupEntity.rotation).add(groupEntity.posicion);
-               expectedTargetWorld.y = altitudObjetivo; // Apply current alt target
-
-               // Check distance to this expected target
-               let currentWorldPosition = new THREE.Vector3();
-               if (d.mesh.parent === mainGroup) {
-                   d.mesh.getWorldPosition(currentWorldPosition);
-               } else {
-                   currentWorldPosition.copy(d.mesh.position);
-               }
-               const distanceToExpected = currentWorldPosition.distanceTo(expectedTargetWorld);
-
-
-               // Update the drone's internal target to the currently expected position
-               // This helps the physics system converge correctly as groups move
-               d.target.copy(expectedTargetWorld);
-
-
-               return distanceToExpected > 0.5; // Still moving if more than 0.5 units away
-         });
-
-
-        if (isMoving) {
-            estado = "moviendo";
-        } else {
-             // If no manual input, no auto modes, and all drones are close to their targets
-             // Transition to "esperando" state
-             estado = "esperando";
-        }
-
+        renderer.render(scene, camera);
+      } else {
+        requestAnimationFrame(animate);
       }
-
-
-      renderer.render(scene, camera);
     }
 
     // Sincronizar slider y input numérico
@@ -1054,29 +671,13 @@
     // Crear formación inicial
     crearFormacion();
 
-    // Sincronizar inputs para número de grupos
-    const sliderGrupos = document.getElementById("numGrupos");
-    const inputGrupos = document.getElementById("numGruposInput");
-
-    function actualizarNumGrupos(valor) {
-      let val = parseInt(valor);
-      if(isNaN(val) || val < 2) val = 2;
-      else if(val > 5) val = 5;
-      sliderGrupos.value = val;
-      inputGrupos.value = val;
-    }
-
+    // Agregar listener para el slider de grupos
+    const sliderGrupos = document.getElementById("cantidadGrupos");
+    const gruposValor = document.getElementById("gruposValor");
+    
     sliderGrupos.addEventListener("input", e => {
-      actualizarNumGrupos(e.target.value);
+      gruposValor.textContent = e.target.value;
     });
-
-    inputGrupos.addEventListener("input", e => {
-      actualizarNumGrupos(e.target.value);
-    });
-
-    // Initial sync of group select
-    actualizarSelectGrupos();
-
 
     animate();
   </script>
